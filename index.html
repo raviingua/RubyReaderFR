@@ -376,8 +376,15 @@
      the top row, where a thumb reaches it, and is the only filled control —
      everything else is an outline, so the eye goes straight to it. */
   .ctlRow{flex:0 0 auto;display:grid;gap:6px;padding:7px 12px;background:var(--panel)}
-  .ctlTop{grid-template-columns:repeat(5,1fr);padding-bottom:3px}
-  .ctlBottom{grid-template-columns:repeat(4,1fr);padding-top:3px;padding-bottom:12px}
+  .ctlTop{grid-template-columns:repeat(5,minmax(0,1fr));padding-bottom:3px}
+  .ctlBottom{grid-template-columns:repeat(4,minmax(0,1fr));padding-top:3px;padding-bottom:12px}
+  /* minmax(0,..) lets a column shrink below its content, and the speed
+     steppers take two columns each, so nothing forces the row wider than the
+     screen. Without this the steppers' minimum width stretched every column
+     and the buttons never got smaller in portrait. */
+  .ctlBottom .wpmRow{grid-column:span 2;min-width:0;gap:4px}
+  .ctlBottom .wpmRow .lbl{min-width:0}
+  .ctlBtn{min-width:0;overflow:hidden}
   .ctlBtn{padding:8px 4px;min-height:44px;border-radius:10px;background:var(--bg);
     border:1px solid var(--line);color:var(--dim);font-size:16px;line-height:1;
     display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
@@ -409,6 +416,11 @@
   .cpanel .done{padding:12px;border-radius:10px;background:var(--accent);color:#fff;font-weight:600;font-size:14px}
 
   @media (max-width:420px){
+    .ctlRow{padding-left:8px;padding-right:8px;gap:4px}
+    .ctlBtn.langBtn{font-size:12px;letter-spacing:0}
+    .ctlBtn small{font-size:9px;letter-spacing:0}
+    .ctlBottom .wpmRow{padding:4px 5px}
+    .ctlBottom .wpmRow button{width:28px;height:28px}
     .topbar{padding:0 50px 0 8px}
     .topbar-row{gap:4px}
     .pill{padding:5px 9px;font-size:11px}
@@ -594,7 +606,9 @@
       </div>
       <div class="ctlRow ctlBottom">
         <button class="ctlBtn langBtn sel" id="langBtnFR" data-lang="fr">FR<small>read</small></button>
+        <button class="ctlBtn langBtn" id="langBtnFRD" data-lang="frd" title="After each French sentence, stay silent for as long as it took to read, so you can repeat it aloud">FR<small>delay</small></button>
         <button class="ctlBtn langBtn sel" id="langBtnEN" data-lang="en">EN<small>read</small></button>
+        <button class="ctlBtn langBtn sel" id="langBtnGL" data-lang="gl" title="Read each line's ruby gloss aloud, in the English voice, once that line finishes">GL<small>read</small></button>
         <div class="wpmRow"><button data-wpm="fr" data-d="-10">&minus;</button><span class="val" id="wpmValFR">150</span><span class="lbl">FR</span><button data-wpm="fr" data-d="10">+</button></div>
         <div class="wpmRow"><button data-wpm="en" data-d="-10">&minus;</button><span class="val" id="wpmValEN">250</span><span class="lbl">EN</span><button data-wpm="en" data-d="10">+</button></div>
       </div>
@@ -1119,8 +1133,15 @@
      one off skips every fragment tagged with that language, which turns a
      mixed paragraph into "just the French bits" or "just the English bits" —
      the nearest thing this app has to the other two apps' single-language
-     modes. The text on screen never changes; only what's spoken does. */
-  var langEnabled={fr:true, en:true};
+     modes. The text on screen never changes; only what's spoken does.
+
+     GL (gloss) is a third toggle living in the same map so it gets the same
+     click wiring below for free, but it isn't a segment language like fr/en —
+     buildUnits() never looks at it, so turning it off skips no segment. It
+     gates a separate thing entirely: whether the gloss under a line's <rt>
+     tags gets read aloud, in English, right after that line finishes. On by
+     default, same as fr/en. */
+  var langEnabled={fr:true, en:true, gl:true, frd:false};   // frd = FR delay, off by default
   document.addEventListener('click',function(e){
     var b=e.target.closest('.langBtn'); if(!b)return;
     var lang=b.dataset.lang;
@@ -1831,8 +1852,59 @@
   function speakUnit(unit, onEnd){
     var chunk={ unit:unit };
     activeChunk=chunk;
+    var startedAt=Date.now();
     var u=new SpeechSynthesisUtterance(unit.text);
     applyVoiceSettings(u, unit.lang);
+    function finish(){ if(activeChunk!==chunk) return; activeChunk=null; unit.spokenMs=Date.now()-startedAt; onEnd(); }
+    u.onend=finish; u.onerror=finish;
+    window.speechSynthesis.speak(u);
+  }
+  // The gloss for one unit, read the same way it appears on the page: every
+  // <rt> inside that unit's rendered span(s), in document order, joined into
+  // one phrase. Not derived from the build-time data — read straight out of
+  // the DOM that's already on screen, which is also why this feature needed
+  // no change to the builder or the data format at all.
+  // A block whose <rt> text is a pronunciation respelling ("mah-TAHNT") rather
+  // than a translation. Shape test, same idea as the build step: a hyphenated
+  // plain-ASCII token with an ALL-CAPS syllable. One such token marks the whole
+  // block, because respelled lines also contain bare syllables ("ay", "duh")
+  // that carry no hyphen or capitals. English glosses never have that shape.
+  function blockGlossIsPronunciation(el){
+    var rts=el.querySelectorAll('rt');
+    for(var i=0;i<rts.length;i++){
+      var w=rts[i].textContent.trim().split(/\s+/);
+      for(var j=0;j<w.length;j++){
+        if(/-/.test(w[j]) && /[A-Z]{2,}/.test(w[j]) && /^[\x20-\x7e]+$/.test(w[j])) return true;
+      }
+    }
+    return false;
+  }
+  function glossTextForUnit(unit){
+    var el=$('blockEl'); if(!el || !unit) return '';
+    if(blockGlossIsPronunciation(el)) return '';   // shown, never read
+    var spans=el.querySelectorAll('.ttsSeg[data-seg="'+unit.i+'"]');
+    var parts=[];
+    for(var i=0;i<spans.length;i++){
+      var rts=spans[i].querySelectorAll('rt');
+      for(var j=0;j<rts.length;j++){
+        var t=rts[j].textContent.trim();
+        if(t && t!=='\u2014') parts.push(t);
+      }
+    }
+    return parts.join(' ');
+  }
+  // Spoken in the English voice regardless of which language the line itself
+  // was — the gloss is English (or a pronunciation respelling) either way,
+  // never French. onEnd fires immediately, with nothing spoken, when the
+  // line had no gloss or GL read is off, so callers never need to branch.
+  function speakGloss(unit, onEnd){
+    if(!langEnabled.gl || !hasTTS){ onEnd(); return; }
+    var text=glossTextForUnit(unit);
+    if(!text){ onEnd(); return; }
+    var chunk={ unit:unit, gloss:true };
+    activeChunk=chunk;
+    var u=new SpeechSynthesisUtterance(text);
+    applyVoiceSettings(u, 'en');
     function finish(){ if(activeChunk!==chunk) return; activeChunk=null; onEnd(); }
     u.onend=finish; u.onerror=finish;
     window.speechSynthesis.speak(u);
@@ -1877,6 +1949,25 @@
     }
   }
   function unitDone(){
+    if(!playing || paused) return;
+    // The unit that just finished — captured before unitIdx moves past it,
+    // since its gloss (if GL read is on) is read before advancing, not after.
+    var justFinished = units && units[unitIdx];
+    // FR delay: after a French sentence, stay silent for as long as it took to
+    // read (measured in speakUnit; word-count estimate if that looks wrong or
+    // there is no speech engine), so the learner can repeat it. This sits
+    // before the gloss, and applies whether or not the line has one.
+    if(langEnabled.frd && justFinished && justFinished.lang==='fr'){
+      var wait = justFinished.spokenMs>=250 ? justFinished.spokenMs : durationForUnit(justFinished);
+      clearTimeout(gapTimer);
+      gapTimer=setTimeout(function(){
+        if(playing && !paused) speakGloss(justFinished, advanceUnit);
+      }, wait);
+      return;
+    }
+    speakGloss(justFinished, advanceUnit);
+  }
+  function advanceUnit(){
     if(!playing || paused) return;
     unitIdx++;
     if(exActive && !exAwaiting){
