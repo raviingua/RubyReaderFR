@@ -622,7 +622,7 @@
         <button class="ctlBtn langBtn sel" id="langBtnFR" data-lang="fr">FR<small>read</small></button>
         <button class="ctlBtn langBtn" id="langBtnFRD" data-lang="frd" title="After each French sentence, stay silent for as long as it took to read, so you can repeat it aloud">FR<small>delay</small></button>
         <button class="ctlBtn langBtn sel" id="langBtnEN" data-lang="en">EN<small>read</small></button>
-        <button class="ctlBtn langBtn sel" id="langBtnGL" data-lang="gl" title="Read each line's ruby gloss aloud, in the English voice, once that line finishes">GL<small>read</small></button>
+        <button class="ctlBtn langBtn sel" id="langBtnGL" data-lang="gl" title="Read each line's ruby gloss aloud (in the other language's voice) once that line finishes">GL<small>read</small></button>
         <div class="wpmRow"><button data-wpm="fr" data-d="-10">&minus;</button><span class="val" id="wpmValFR">150</span><span class="lbl">FR</span><button data-wpm="fr" data-d="10">+</button></div>
         <div class="wpmRow"><button data-wpm="en" data-d="-10">&minus;</button><span class="val" id="wpmValEN">250</span><span class="lbl">EN</span><button data-wpm="en" data-d="10">+</button></div>
       </div>
@@ -1926,18 +1926,35 @@
     }
     return parts.join(' ');
   }
-  // Spoken in the English voice regardless of which language the line itself
-  // was — the gloss is English (or a pronunciation respelling) either way,
-  // never French. onEnd fires immediately, with nothing spoken, when the
-  // line had no gloss or GL read is off, so callers never need to branch.
+  // Which language is this gloss in? The gloss is normally the OTHER language
+  // from the line it sits on: English under French lines, but French under
+  // English lines in the swapped "Read with the translations" sections.
+  // Look at the gloss text first (clear French or English wording wins); when
+  // the text is too short or ambiguous ("walking", "Tintin"), fall back to
+  // "the opposite of the line's own language".
+  var FR_WORDS=/^(le|la|les|un|une|des|du|de|au|aux|et|est|sont|je|tu|il|elle|on|nous|vous|ils|elles|ce|cet|cette|ces|qui|que|qu|ne|pas|dans|pour|sur|avec|sans|son|sa|ses|mon|ma|mes|ton|ta|tes|se|y|en|à|où|mais|ou|donc|très|plus|aussi|si|comme|chez|par|il|lui|leur|leurs|être|avoir|fait|font|va|vont|a|ont|suis|es|êtes|sommes|l|d|j|s|c|n|m|t)$/i;
+  var EN_WORDS=/^(the|a|an|and|is|are|was|were|be|been|to|of|in|on|at|with|without|for|from|by|he|she|it|we|they|i|you|his|her|its|their|my|your|our|this|that|these|those|who|which|what|not|no|do|does|did|has|have|had|will|would|can|could|but|or|as|if|so|very|more|just|there|here|then|than|him|them|us|me|into|about|up|out|over|after|before)$/i;
+  function guessGlossLang(text, unitLang){
+    var fr=0, en=0;
+    if(/[àâäçéèêëîïôöûùüœÿ]/i.test(text)) fr+=2;
+    var w=text.toLowerCase().replace(/[’']/g,' ').split(/[^a-zà-ÿœ]+/).filter(Boolean);
+    for(var i=0;i<w.length;i++){
+      var f=FR_WORDS.test(w[i]), e=EN_WORDS.test(w[i]);
+      if(f && !e) fr++; else if(e && !f) en++;
+    }
+    if(fr>en) return 'fr';
+    if(en>fr) return 'en';
+    return unitLang==='fr' ? 'en' : 'fr';
+  }
   function speakGloss(unit, onEnd){
     if(!langEnabled.gl || !hasTTS){ onEnd(); return; }
     var text=glossTextForUnit(unit);
     if(!text){ onEnd(); return; }
     var chunk={ unit:unit, gloss:true };
     activeChunk=chunk;
+    var gLang=guessGlossLang(text, unit.lang);
     var u=new SpeechSynthesisUtterance(text);
-    applyVoiceSettings(u, 'en');
+    applyVoiceSettings(u, gLang);
     function finish(){ if(activeChunk!==chunk) return; activeChunk=null; onEnd(); }
     u.onend=finish; u.onerror=finish;
     window.speechSynthesis.speak(u);
