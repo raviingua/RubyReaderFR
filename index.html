@@ -145,6 +145,13 @@
   .fsPlay.on{display:block}
   .stage[data-light="1"] .fsPlay{background:rgba(255,255,255,.65);color:#333;border-color:#ccc}
   .stage[data-light="1"] .hideToggle{background:rgba(255,255,255,.65);color:#333;border-color:#ccc}
+  /* Close and previous / next chapter for the hidden-controls (full screen)
+     view. The top bar, and the buttons in it, are hidden with the rest of the
+     controls, so these sit in the opposite corner to play and show-controls
+     and only appear while they do. */
+  .fsNav{position:absolute;top:8px;left:10px;z-index:6;display:none;align-items:center;gap:6px}
+  .fsNav.on{display:flex}
+  .stage[data-light="1"] .fsNav .pill{background:rgba(255,255,255,.65);color:#333;border-color:#ccc}
   /* The pill row WRAPS onto as many rows as it needs instead of scrolling
      sideways. A single sideways-scrolling row of a dozen pills was hard to
      reach the end of on a narrow screen, and on some it could not be scrolled
@@ -430,6 +437,8 @@
     .textDisplay{padding:var(--topPad,52px) 6% 16px}
     .hideToggle{top:4px;right:6px;padding:5px 8px;font-size:11px}
     .fsPlay{top:4px;right:44px;padding:5px 8px;font-size:11px}
+    .fsNav{top:4px;left:6px;gap:4px}
+    .fsNav .pill{padding:5px 8px;font-size:11px}
     .fsPlay.pos-bottom{top:auto;right:auto;bottom:55px;padding:10px 21px;font-size:17px}
   }
 </style>
@@ -526,7 +535,7 @@
     <div class="field">
       <button class="pill" id="clearCacheBtn" style="align-self:flex-start;padding:10px 16px">Clear remembered settings</button>
       <p class="hint">Forgets the settings this page remembers between visits (language buttons, speeds,
-        pauses, voices, theme and colours, exercise mode, GL order, scroll view, and where you were reading) and starts again
+        pauses, voices, theme and colours, exercise mode, GL order, scroll view, full screen, and where you were reading) and starts again
         from the defaults. Your passphrase and text sizes are not touched.</p>
     </div>
   </section>
@@ -564,6 +573,11 @@
       </div>
       <button class="pill icon fsPlay" id="fsPlayBtn" title="Play / pause">&#9658;</button>
       <button class="pill icon hideToggle" id="hideBtn" title="Hide all controls">⤢</button>
+      <div class="fsNav" id="fsNav">
+        <button class="pill" id="fsCloseBtn" title="Close and go back to the book list">✕ Close</button>
+        <button class="pill" id="fsPrevBtn" title="Previous chapter">‹ Prev</button>
+        <button class="pill" id="fsNextBtn" title="Next chapter">Next ›</button>
+      </div>
       <div class="chapterToast" id="chapterToast"></div>
       <div class="textDisplay" id="textDisplay"><div class="inner" id="textInner"></div></div>
       <div class="pageInd" id="pageInd">
@@ -828,6 +842,10 @@
     loadChapterByIndex(currentBook,(currentChapterIdx+1)%n,keep);
   });
   $('closeBtn').onclick=function(){ stop(); $('reader').classList.remove('on'); $('reader').style.display='none'; $('setup').style.display='flex'; };
+  // Full-screen copies of Close / Prev / Next: they just press the top bar's own buttons.
+  $('fsCloseBtn').onclick=function(){ $('closeBtn').click(); };
+  $('fsPrevBtn').onclick=function(){ $('prevChapterBtn').click(); };
+  $('fsNextBtn').onclick=function(){ $('nextChapterBtn').click(); };
 
   /* ========== voices ==========
      Two independent voice slots, one per language. Unlike the other two
@@ -1145,6 +1163,7 @@
     $('topbar').style.pointerEvents = controlsHidden?'none':'auto';
     $('controls').classList.toggle('hidden',controlsHidden);
     $('fsPlayBtn').classList.toggle('on', controlsHidden);
+    $('fsNav').classList.toggle('on', controlsHidden);
     $('hideBtn').textContent = controlsHidden ? '⤡' : '⤢';
     $('hideBtn').title = controlsHidden ? 'Show all controls' : 'Hide all controls';
     syncTopPad();
@@ -2309,6 +2328,7 @@
       ex:exMode,
       glFirst:glFirst,
       view:setupView,                           // scroll-mode view: 'block' or 'chapter'
+      fs:controlsHidden,                        // full screen = controls hidden
       pos:lastPos
     };
   }
@@ -2358,6 +2378,7 @@
       applyAppTheme();
       if(Array.isArray(s.palette) && /^#[0-9a-f]{6}$/i.test(s.palette[0]) && /^#[0-9a-f]{6}$/i.test(s.palette[1])) applyPalette(s.palette[0],s.palette[1]);
       if(typeof s.ex==='boolean'){ exMode=s.ex; applyExModeBtn(); updateRbNote(); }
+      if(typeof s.fs==='boolean' && s.fs){ controlsHidden=true; applyHidden(); }
       if(typeof s.glFirst==='boolean'){ glFirst=s.glFirst; applyGlOrderBtn(); }
       if(s.view==='block' || s.view==='chapter'){
         setupView=s.view; segSelect('viewSeg', setupView);
