@@ -573,7 +573,7 @@
     <div class="field">
       <button class="pill" id="clearCacheBtn" style="align-self:flex-start;padding:10px 16px">Clear remembered settings</button>
       <p class="hint">Forgets the settings this page remembers between visits (language buttons, speeds,
-        pauses, voices, theme and colours, exercise mode, exercise position, GL order, scroll view, page turning, full screen, and where you were reading) and starts again
+        pauses, voices, theme and colours, exercise mode, exercise position, GL order, scroll view, page turning, full screen, and where you were reading in each book) and starts again
         from the defaults. Your passphrase and text sizes are not touched.</p>
     </div>
   </section>
@@ -723,6 +723,17 @@
   function chooseBook(b){
     selectedBook=b; bookInput.value=b.title; bookList.classList.remove('show');
     fillParts(); updateLoadEnabled(); updateClearBtn();
+    showSavedPosition(b);
+  }
+  // Every book keeps its own reading position (see "remembered settings" at the
+  // bottom). Coming back to a book puts the Part and Section dropdowns on the
+  // chapter you were in, instead of on its first one. The block inside that
+  // chapter is restored when you press Load.
+  function showSavedPosition(b){
+    var p=positions && positions[b.id]; if(!p) return;
+    var c=b.chapters[p.ci]; if(!c) return;
+    partSel.value=String(chapterPart(c,p.ci)); fillChapters();
+    chapSel.value=String(p.ci);
   }
   function clearBook(){
     selectedBook=null; bookInput.value='';
@@ -865,6 +876,10 @@
 
   loadBtn.addEventListener('click',function(){
     if(!selectedBook)return; var ci=parseInt(chapSel.value,10)||0;
+    // Loading the chapter this book was last read in picks up at the block you
+    // stopped on; any other chapter starts at its beginning.
+    var p=positions && positions[selectedBook.id];
+    pendingBlock = (p && p.ci===ci) ? { book:selectedBook.id, ci:ci, blk:p.blk } : null;
     loadChapterByIndex(selectedBook,ci);
   });
   // Prev/Next chapter carry playback with them: if it was reading when you
@@ -2493,22 +2508,48 @@
      from the dropdowns, because the dropdowns are empty until the browser
      reports its voice list, and reading them early would overwrite the
      remembered choice with "Automatic".
-     Where you were reading restores the book / part / chapter pick and, when
-     you open that chapter, the block. It does not open the reader by itself:
-     that needs the passphrase and a deliberate Load. */
+     Where you were reading is kept per book. The book that was open last is
+     picked again on startup; choosing any book puts its Part / Section on the
+     chapter you were in, and Load resumes the block. Switching to another book
+     and back loses nothing. It does not open the reader by itself: that needs
+     the passphrase and a deliberate Load. */
   var SETTINGS_KEY='rdrSettings', settingsClearing=false, lastSaved='';
   function readSaved(){
     try{ var o=JSON.parse(localStorage.getItem(SETTINGS_KEY)||'null'); return (o && typeof o==='object') ? o : null; }
     catch(e){ return null; }
   }
   var savedSettings=readSaved();
-  var lastPos=(savedSettings && savedSettings.pos) || null;
+  var lastPos=(savedSettings && savedSettings.pos) || null;   // which book was open last
   var pendingBlock=null;
+
+  // One reading position PER BOOK: { bookId: {ci:chapter index, blk:block} }.
+  // lastPos above only says which book was open last (so the page can reopen on
+  // it); this map is what lets you swap books and come back to each one where
+  // you left it.
+  var positions=Object.create(null);
+  (function(){
+    function okInt(v){ return typeof v==='number' && isFinite(v) && v>=0; }
+    var sp=savedSettings && savedSettings.positions;
+    if(sp && typeof sp==='object'){
+      Object.keys(sp).forEach(function(id){
+        var q=sp[id];
+        if(q && okInt(q.ci) && okInt(q.blk)) positions[id]={ ci:Math.floor(q.ci), blk:Math.floor(q.blk) };
+      });
+    }
+    // Settings saved before this existed only have the single last position;
+    // keep it as that book's entry so nobody loses where they are right now.
+    var lp=savedSettings && savedSettings.pos;
+    if(lp && (typeof lp.book==='string' || typeof lp.book==='number') && !positions[lp.book] && okInt(lp.ci) && okInt(lp.blk))
+      positions[lp.book]={ ci:Math.floor(lp.ci), blk:Math.floor(lp.blk) };
+  })();
 
   function collectSettings(){
     var def=stagePalette(resolvedTheme());
     var bg=$('bgPick').value, tx=$('textPick').value;
-    if(currentBook) lastPos={ book:currentBook.id, ci:currentChapterIdx, blk:idx };
+    if(currentBook){
+      lastPos={ book:currentBook.id, ci:currentChapterIdx, blk:idx };
+      positions[currentBook.id]={ ci:currentChapterIdx, blk:idx };
+    }
     return {
       v:1,
       lang:{ fr:langEnabled.fr, en:langEnabled.en, gl:langEnabled.gl, frd:langEnabled.frd, end:langEnabled.end },
@@ -2524,7 +2565,8 @@
       glFirst:glFirst,
       view:setupView,                           // scroll-mode view: 'block' or 'chapter'
       fs:controlsHidden,                        // full screen = controls hidden
-      pos:lastPos
+      pos:lastPos,                              // the book that was open last
+      positions:positions                       // where you were in EACH book
     };
   }
   function persistSettings(){
@@ -2538,11 +2580,7 @@
   function restoreSelection(){
     var p=lastPos; if(!p || !MANIFEST) return;
     var b=MANIFEST.books.filter(function(x){ return x.id===p.book; })[0]; if(!b) return;
-    var c=b.chapters[p.ci]; if(!c) return;
-    chooseBook(b);
-    partSel.value=String(chapterPart(c,p.ci)); fillChapters();
-    chapSel.value=String(p.ci);
-    pendingBlock=p;
+    chooseBook(b);   // also puts Part / Section on this book's saved spot; Load resumes the block
   }
 
   $('voiceSelectFR').addEventListener('change',function(){ pendingVoice.fr=this.value; });
